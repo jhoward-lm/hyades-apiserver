@@ -18,13 +18,47 @@
  */
 package org.dependencytrack.event;
 
-import alpine.event.framework.Event;
+import alpine.event.framework.UnblockedEvent;
+import alpine.model.OidcUser;
 
 /**
  * Defines an event used to start a sync task of current user's GitLab groups.
  *
  * @author Jonathan Howard
  */
-public class GitLabSyncEvent implements Event {
+public class GitLabSyncEvent implements UnblockedEvent {
+
+    private String accessToken;
+    private OidcUser user;
+
+    public GitLabSyncEvent() {
+
+    }
+
+    public GitLabSyncEvent(final String accessToken, final OidcUser user) {
+        this.accessToken = accessToken;
+        this.user = user;
+    }
+
+    public String getAccessToken() {
+        return accessToken;
+    }
+
+    public void setAccessToken(final String accessToken) {
+        this.accessToken = accessToken;
+    }
+
+    public OidcUser getUser() {
+        return user;
+    }
+
+    public void setUser(OidcUser user) {
+        this.user = user;
+    }
+
+    @Override
+    public String toString() {
+        return "%s{accessToken=%s, user=%s}".formatted(getClass().getName(), accessToken, user);
+    }
 
 }

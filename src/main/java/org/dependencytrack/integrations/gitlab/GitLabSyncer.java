@@ -20,25 +20,22 @@ package org.dependencytrack.integrations.gitlab;
 
 import alpine.common.logging.Logger;
 import alpine.model.ConfigProperty;
+import alpine.model.OidcUser;
+import alpine.model.Permission;
 import alpine.model.Team;
-import alpine.model.UserPrincipal;
-import alpine.server.auth.AuthorizationTokenCookie;
-import alpine.server.auth.JsonWebToken;
 
+import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.integrations.AbstractIntegrationPoint;
 import org.dependencytrack.integrations.PermissionsSyncer;
 import org.dependencytrack.model.Project;
-import org.dependencytrack.persistence.QueryManager;
 import org.dependencytrack.resources.v1.UserResource;
 
-import java.net.URL;
-import java.security.Principal;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.dependencytrack.model.ConfigPropertyConstants.GENERAL_BASE_URL;
-import static org.dependencytrack.model.ConfigPropertyConstants.GITLAB_APP_ID;
 import static org.dependencytrack.model.ConfigPropertyConstants.GITLAB_ENABLED;
-import static org.dependencytrack.model.ConfigPropertyConstants.GITLAB_TOKEN;
-import static org.dependencytrack.model.ConfigPropertyConstants.GITLAB_URL;
 
 public class GitLabSyncer extends AbstractIntegrationPoint implements PermissionsSyncer {
 
@@ -46,9 +43,21 @@ public class GitLabSyncer extends AbstractIntegrationPoint implements Permission
     private static final String INTEGRATIONS_GROUP = GITLAB_ENABLED.getGroupName();
     private static final String GENERAL_GROUP = GENERAL_BASE_URL.getGroupName();
     private static final String ROLE_CLAIM_PREFIX = "https://gitlab.org/claims/groups/";
-    private static final String ROLE_DEVELOPER = "developer";
-    private static final String ROLE_MAINTAINER = "maintainer";
-    private static final String ROLE_OWNER = "owner";
+    private static final String ROLE_DEVELOPER = "DEVELOPER";
+    private static final String ROLE_GUEST = "GUEST";
+    private static final String ROLE_MAINTAINER = "MAINTAINER";
+    private static final String ROLE_OWNER = "OWNER";
+    private static final String ROLE_REPORTER = "REPORTER";
+
+    private final String accessToken;
+
+    public GitLabSyncer(final String accessToken) {
+        this.accessToken = accessToken;
+    }
+
+    public String getAccessToken() {
+        return accessToken;
+    }
 
     @Override
     public String name() {
@@ -63,48 +72,119 @@ public class GitLabSyncer extends AbstractIntegrationPoint implements Permission
     @Override
     public boolean isEnabled() {
         final ConfigProperty enabled = qm.getConfigProperty(INTEGRATIONS_GROUP, GITLAB_ENABLED.getPropertyName());
-        return enabled != null && Boolean.valueOf(enabled.getPropertyValue());
+
+        return enabled != null && Boolean.parseBoolean(enabled.getPropertyValue());
     }
 
     @Override
-    public void synchronize(final Project project) {
-        final ConfigProperty gitLabAppId = qm.getConfigProperty(INTEGRATIONS_GROUP, GITLAB_APP_ID.getPropertyName());
-        final ConfigProperty gitLabToken = qm.getConfigProperty(INTEGRATIONS_GROUP, GITLAB_TOKEN.getPropertyName());
-        final ConfigProperty gitLabUrl = qm.getConfigProperty(INTEGRATIONS_GROUP, GITLAB_URL.getPropertyName());
-        final ConfigProperty baseUrl = qm.getConfigProperty(GENERAL_GROUP, GENERAL_BASE_URL.getPropertyName());
+    public void synchronize(final OidcUser user) {
+        // TODO: GitLab API call to get user projects
+        List<String> projects = new ArrayList<>();
 
-        UserPrincipal principal = (new UserResource()).getSelf().readEntity(UserPrincipal.class);
-        String token = new JsonWebToken().createToken((Principal) principal);
-        AuthorizationTokenCookie cookie = new AuthorizationTokenCookie(token);
-        String state = cookie.toString();
+        createProjectStructure(projects);
+    }
 
-        try (final QueryManager qm = new QueryManager()) {
-            final GitLabClient client = new GitLabClient(this, new URL(gitLabUrl.getPropertyValue()),
-                    new String(gitLabToken.getPropertyValue()));
+    /**
+     * Create hierarchical project structure for user's GitLab projects.
+     *
+     * For example, if a GitLab project path is org/group/subgroup/project,
+     * then the following Dependency-Track projects will be created:
+     *
+     *   - org
+     *   - org/group
+     *   - org/group/subgroup
+     *   - org/group/subgroup/project
+     *
+     * @param projects the list of GitLab project names available to the user
+     */
+    private void createProjectStructure(List<String> projects) {
+        OidcUser user = (new UserResource()).getSelf().readEntity(OidcUser.class);
 
-            // Send request to GitLab API to get OIDC user's groups
-            client.getGitLabGroupClaims(gitLabToken.getPropertyValue(),
-                    gitLabAppId.getPropertyValue(),
-                    baseUrl.getPropertyValue(),
-                    state);
+        for (String project : projects) {
+            Project parent = null;
+            List<String> toCreate = getProjectNames(project);
 
-            // TODO: Get effective access for groups
+            for (String group : toCreate) {
+                LOGGER.debug("Creating project " + group);
 
-            // Create team and add to project
-            for (String s : new String[] { ROLE_DEVELOPER, ROLE_MAINTAINER, ROLE_OWNER }) {
-                final String teamName = String.join("-", project.getName(), s);
+                Project existingProject = qm.getProject(group, null);
+                if (qm.getProject(group, null) != null) {
+                    parent = existingProject;
+                    continue;
+                }
 
-                Team team = qm.getTeam(teamName);
-                team = team != null ? team : qm.createTeam(teamName, false);
-
-                // TODO: set permissions for team
-                // team.setPermissions(null);
-
-                project.addAccessTeam(team);
+                parent = qm.createProject(group, null, null, null, parent, null, null, false);
             }
-        } catch (Exception e) {
-            LOGGER.error("An error occurred attempting to synchronize GitLab groups", e);
-            handleException(LOGGER, e);
+
+            // Set access teams for last project created (the full path of the GitLab project)
+            List<Team> teams = createProjectTeams(parent);
+
+            List<Team> userTeams = user.getTeams();
+            for (Team team : userTeams) {
+                if (!teams.contains(team)) {
+                    userTeams.add(team);
+                }
+            }
+
+            user.setTeams(userTeams);
         }
     }
+
+    /**
+     * Create teams for a Dependency-Track project representing a project within GitLab.
+     *
+     * @param project Dependency-Track project representing a GitLab project
+     * @return the Dependency-Track teams for the project
+     */
+    private List<Team> createProjectTeams(Project project) {
+        List<Team> teams = new ArrayList<>();
+
+        for (String role : new String[]{ROLE_DEVELOPER, ROLE_GUEST, ROLE_MAINTAINER, ROLE_OWNER, ROLE_REPORTER}) {
+            final String teamName = "%s_%s".formatted(project.getName(), role);
+
+            Team team = qm.getTeam(teamName);
+            team = team != null ? team : qm.createTeam(teamName);
+
+            List<Permission> permissions = team.getPermissions();
+            Permission viewPermission = qm.getPermission(Permissions.Constants.VIEW_PORTFOLIO);
+
+            if (!permissions.contains(viewPermission)) {
+                permissions.add(viewPermission);
+            }
+
+            team.setPermissions(permissions);
+
+            project.addAccessTeam(team);
+            teams.add(team);
+        }
+
+        return teams;
+    }
+
+    /**
+     * Generate list of hierarchical projects to be created to represent user's
+     * GitLab projects.
+     *
+     * For example, if a GitLab project path is org/group/subgroup/project, then
+     * the following project names will be returned:
+     *
+     * - org
+     * - org/group
+     * - org/group/subgroup
+     * - org/group/subgroup/project
+     *
+     * @param project the GitLab project name
+     * @return the project names to be created
+     */
+    private List<String> getProjectNames(String project) {
+        List<String> projects = new ArrayList<>();
+        List<String> parts = Arrays.asList(project.split("/"));
+
+        for (int i = 0; i < parts.size(); i++) {
+            projects.add(String.join("/", parts.subList(0, i + 1)));
+        }
+
+        return projects;
+    }
+
 }

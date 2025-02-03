@@ -26,16 +26,8 @@ import org.gitlab4j.api.Pager;
 
 import alpine.common.logging.Logger;
 
-import org.apache.http.HttpStatus;
-import org.apache.http.StatusLine;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.client.utils.URIBuilder;
-import org.dependencytrack.common.HttpClientPool;
 import org.json.JSONArray;
 
-import java.io.IOException;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -54,52 +46,6 @@ public class GitLabClient {
         this.syncer = syncer;
         this.baseURL = baseURL;
         this.api = new GitLabApi(baseURL.toString(), gitlabToken);
-    }
-
-    public String buildUrl(final String appId, final String state, String redirectUri) {
-        try {
-            URIBuilder builder = new URIBuilder(redirectUri).setPath("/static/oidc-callback.html");
-            redirectUri = builder.build().toString();
-
-            builder = new URIBuilder(this.baseURL.toString())
-                    .setPath("/oauth/authorize")
-                    .addParameter("client_id", appId)
-                    .addParameter("redirect_uri", redirectUri)
-                    .addParameter("response_type", "code")
-                    .addParameter("state", state)
-                    .addParameter("scope", String.join("+", "openid", "profile", "email", "read_api"));
-
-            if (builder.getScheme() == null || builder.getScheme().trim().isEmpty())
-                builder.setScheme("https");
-
-            return builder.build().toString();
-        } catch (URISyntaxException ex) {
-            syncer.handleException(LOGGER, ex);
-        }
-
-        return null;
-    }
-
-    public void getGitLabGroupClaims(final String token, final String appId, final String state, String redirectUri) {
-        LOGGER.debug("Synchronizing Dependency-Track permissions with GitLab instance");
-
-        String url = buildUrl(appId, state, redirectUri);
-
-        HttpGet request = new HttpGet(url);
-        request.addHeader("accept", "application/json");
-        request.addHeader("Authorization", "Bearer " + token);
-
-        try (CloseableHttpResponse response = HttpClientPool.getClient().execute(request)) {
-            StatusLine status = response.getStatusLine();
-
-            if (status.getStatusCode() == HttpStatus.SC_OK) {
-                LOGGER.debug("Successfully synchronized GitLab permissions");
-            } else {
-                syncer.handleUnexpectedHttpResponse(LOGGER, url, status.getStatusCode(), status.getReasonPhrase());
-            }
-        } catch (IOException ex) {
-            syncer.handleException(LOGGER, ex);
-        }
     }
 
     // JSONArray to ArrayList simple converter
