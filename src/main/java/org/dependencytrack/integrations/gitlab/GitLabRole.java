@@ -16,16 +16,16 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) OWASP Foundation. All Rights Reserved.
  */
-package org.dependencytrack.integrations;
+package org.dependencytrack.integrations.gitlab;
 
-import org.dependencytrack.persistence.QueryManager;
-
-public interface PermissionsSyncer extends IntegrationPoint {
-
-    boolean isEnabled();
-
-    void setQueryManager(QueryManager qm);
-
-    void synchronize();
-
+/**
+ * Definitions of access levels/roles as defined by GitLab.
+ */
+public enum GitLabRole {
+    GUEST, // Applies to private and internal projects only
+    PLANNER,
+    REPORTER,
+    DEVELOPER,
+    MAINTAINER,
+    OWNER
 }
