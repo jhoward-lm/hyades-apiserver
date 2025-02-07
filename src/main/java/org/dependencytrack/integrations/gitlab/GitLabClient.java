@@ -22,7 +22,10 @@ import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
+import org.dependencytrack.auth.Permissions;
 import org.json.JSONArray;
 
 import alpine.common.logging.Logger;
@@ -48,5 +51,66 @@ public class GitLabClient {
 
         return list;
     }
+    Map<GitLabRole, List<Permissions>> rolePermissions = Map.of(
+        GitLabRole.GUEST, List.of(
+                Permissions.VIEW_PORTFOLIO,
+                Permissions.VIEW_VULNERABILITY,
+                Permissions.VIEW_BADGES
+        ),
+        GitLabRole.PLANNER, List.of(
+                Permissions.VIEW_PORTFOLIO,
+                Permissions.VIEW_VULNERABILITY,
+                Permissions.VIEW_POLICY_VIOLATION,
+                Permissions.VIEW_BADGES
+        ),
+        GitLabRole.REPORTER, List.of(
+                Permissions.VIEW_PORTFOLIO,
+                Permissions.VIEW_VULNERABILITY,
+                Permissions.VIEW_POLICY_VIOLATION,
+                Permissions.VIEW_BADGES
+        ),
+        GitLabRole.DEVELOPER, List.of(
+                Permissions.BOM_UPLOAD,
+                Permissions.VIEW_PORTFOLIO,
+                Permissions.PORTFOLIO_MANAGEMENT_READ,
+                Permissions.VIEW_VULNERABILITY,
+                Permissions.VULNERABILITY_ANALYSIS_READ,
+                Permissions.PROJECT_CREATION_UPLOAD
+        ),
+        GitLabRole.MAINTAINER, List.of(
+                Permissions.BOM_UPLOAD,
+                Permissions.PORTFOLIO_MANAGEMENT,
+                Permissions.PORTFOLIO_MANAGEMENT_CREATE,
+                Permissions.PORTFOLIO_MANAGEMENT_READ,
+                Permissions.PORTFOLIO_MANAGEMENT_UPDATE,
+                Permissions.PORTFOLIO_MANAGEMENT_DELETE,
+                Permissions.VULNERABILITY_ANALYSIS,
+                Permissions.VULNERABILITY_ANALYSIS_CREATE,
+                Permissions.VULNERABILITY_ANALYSIS_READ,
+                Permissions.VULNERABILITY_ANALYSIS_UPDATE,
+                Permissions.POLICY_MANAGEMENT,
+                Permissions.POLICY_MANAGEMENT_CREATE,
+                Permissions.POLICY_MANAGEMENT_READ,
+                Permissions.POLICY_MANAGEMENT_UPDATE,
+                Permissions.POLICY_MANAGEMENT_DELETE
+        ),
+        GitLabRole.OWNER, List.of(
+                Permissions.ACCESS_MANAGEMENT,
+                Permissions.ACCESS_MANAGEMENT_CREATE,
+                Permissions.ACCESS_MANAGEMENT_READ,
+                Permissions.ACCESS_MANAGEMENT_UPDATE,
+                Permissions.ACCESS_MANAGEMENT_DELETE,
+                Permissions.SYSTEM_CONFIGURATION,
+                Permissions.SYSTEM_CONFIGURATION_CREATE,
+                Permissions.SYSTEM_CONFIGURATION_READ,
+                Permissions.SYSTEM_CONFIGURATION_UPDATE,
+                Permissions.SYSTEM_CONFIGURATION_DELETE,
+                Permissions.TAG_MANAGEMENT,
+                Permissions.TAG_MANAGEMENT_DELETE
+        )
+);
 
+    public List<Permissions> getRolePermissions(final GitLabRole role) {
+        return rolePermissions.get(role);
+    }
 }
