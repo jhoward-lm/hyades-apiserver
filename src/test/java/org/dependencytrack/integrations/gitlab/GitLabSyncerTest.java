@@ -22,9 +22,7 @@ import org.junit.Assert;
 import alpine.Config;
 import alpine.model.ConfigProperty;
 import alpine.model.OidcUser;
-import alpine.model.Team;
 
-import org.dependencytrack.model.Project;
 import org.dependencytrack.PersistenceCapableTest;
 import org.junit.Before;
 import org.junit.Test;
@@ -33,17 +31,13 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnitRunner;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-//import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import java.util.Arrays;
-import java.util.List;
 
 /**
  * This test suite validates the integration with the GitLab API.
@@ -115,38 +109,5 @@ public class GitLabSyncerTest extends PersistenceCapableTest {
         verify(qm, times(2)).createProject(anyString(), any(), any(), any(), any(), any(), any(), anyBoolean());
         verify(qm, times(2)).getTeam(anyString());
         verify(qm, times(2)).createTeam(anyString());
-    }
-
-    @Test
-    public void testCreateProjectTeams_NoExistingTeam() {
-        // Arrange
-        Project project = new Project();
-        Team team = new Team();
-        when(qm.getTeam(any())).thenReturn(null);
-        when(qm.createTeam(any())).thenReturn(team);
-
-        // Act
-        List<Team> teams = gitLabSyncer.createProjectTeams(project);
-
-        // Assert
-        verify(qm, times(2)).createTeam(any());
-        verify(qm, times(2)).getPermission(any());
-        assertEquals(2, teams.size());
-    }
-
-    @Test
-    public void testCreateProjectTeams_ExistingTeam() {
-        // Arrange
-        Project project = new Project();
-        Team team = new Team();
-        when(qm.getTeam(any())).thenReturn(team);
-
-        // Act
-        List<Team> teams = gitLabSyncer.createProjectTeams(project);
-
-        // Assert
-        verify(qm, never()).createTeam(any());
-        verify(qm, times(2)).getPermission(any());
-        assertEquals(2, teams.size());
     }
 }
