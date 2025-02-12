@@ -98,7 +98,7 @@ public class GitLabSyncer extends AbstractIntegrationPoint implements Permission
         }
     }
 
-    private List<Project> createProjects(List<GitLabProject> gitLabProjects) {
+    public List<Project> createProjects(List<GitLabProject> gitLabProjects) {
         List<Project> projects = new ArrayList<>();
 
         for (GitLabProject gitLabProject : gitLabProjects) {
@@ -125,7 +125,7 @@ public class GitLabSyncer extends AbstractIntegrationPoint implements Permission
      * @param project Dependency-Track project representing a GitLab project
      * @return the Dependency-Track teams for the project
      */
-    private List<Team> createProjectTeams(Project project) {
+    public List<Team> createProjectTeams(Project project) {
         List<Team> teams = new ArrayList<>();
 
         for (GitLabRole role : GitLabRole.values()) {
