@@ -43,18 +43,12 @@ public class GitLabSyncer extends AbstractIntegrationPoint implements Permission
     private static final String GENERAL_GROUP = GENERAL_BASE_URL.getGroupName();
     private static final String ROLE_CLAIM_PREFIX = "https://gitlab.org/claims/groups/";
 
-    private final String accessToken;
     private final OidcUser user;
     private GitLabClient gitLabClient;
 
-    public GitLabSyncer(final String accessToken, final OidcUser user, final GitLabClient gitlabClient) {
-        this.accessToken = accessToken;
+    public GitLabSyncer(final OidcUser user, final GitLabClient gitlabClient) {
         this.user = user;
         this.gitLabClient = gitlabClient;
-    }
-
-    public String getAccessToken() {
-        return accessToken;
     }
 
     @Override
@@ -94,7 +88,7 @@ public class GitLabSyncer extends AbstractIntegrationPoint implements Permission
             projects = projects.stream().map(project -> qm.updateProject(project, false)).toList();
         } catch (IOException | URISyntaxException ex) {
             LOGGER.error("An error occurred while querying GitLab GraphQL API", ex);
-            this.handleException(LOGGER, ex);
+            handleException(LOGGER, ex);
         }
     }
 
