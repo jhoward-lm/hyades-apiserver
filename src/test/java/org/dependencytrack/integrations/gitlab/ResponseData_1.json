@@ -1,0 +1,33 @@
+{
+  "data": {
+    "projects": {
+      "nodes": [
+        {
+          "name": "dummy_1",
+          "fullPath": "testing/dummy_1",
+          "maxAccessLevel": {
+            "stringValue": "DEVELOPER"
+          }
+        },
+        {
+          "name": "dummy_2",
+          "fullPath": "still_testing/dummy_2",
+          "maxAccessLevel": {
+            "stringValue": "REPORTER"
+          }
+        },
+        {
+          "name": "dummy_3",
+          "fullPath": "guess_what_still_testing/dummy_3",
+          "maxAccessLevel": {
+            "stringValue": "REPORTER"
+          }
+        }
+      ],
+      "pageInfo": {
+        "endCursor": "eyJpZCI6IjE1ODU5NyJ9",
+        "hasNextPage": true
+      }
+    }
+  }
+}

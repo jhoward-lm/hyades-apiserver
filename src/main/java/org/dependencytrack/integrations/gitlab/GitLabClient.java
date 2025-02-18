@@ -55,6 +55,7 @@ public class GitLabClient {
 
     private final String accessToken;
     private final URI baseURL;
+    private final Config config;
 
     private final Map<GitLabRole, List<Permissions>> rolePermissions = Map.of(
             GitLabRole.GUEST, List.of(
@@ -109,8 +110,15 @@ public class GitLabClient {
                     Permissions.TAG_MANAGEMENT_DELETE));
 
     public GitLabClient(final String accessToken) {
+        this.config = Config.getInstance();
         this.accessToken = accessToken;
-        this.baseURL = URI.create(Config.getInstance().getProperty(Config.AlpineKey.OIDC_ISSUER));;
+        this.baseURL = URI.create(this.config.getProperty(Config.AlpineKey.OIDC_ISSUER));
+    }
+
+    public GitLabClient(final String accessToken, final Config config) {
+        this.config = config;
+        this.accessToken = accessToken;
+        this.baseURL = URI.create(config.getProperty(Config.AlpineKey.OIDC_ISSUER));
     }
 
     public List<GitLabProject> getGitLabProjects() throws IOException, URISyntaxException {
@@ -175,5 +183,4 @@ public class GitLabClient {
 
         return list;
     }
-
 }
