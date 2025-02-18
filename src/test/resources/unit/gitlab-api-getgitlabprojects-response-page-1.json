@@ -3,22 +3,22 @@
     "projects": {
       "nodes": [
         {
-          "name": "dummy_1",
-          "fullPath": "testing/dummy_1",
+          "name": "test-project-1",
+          "fullPath": "test-group/test-subgroup/test-project-1",
           "maxAccessLevel": {
             "stringValue": "DEVELOPER"
           }
         },
         {
-          "name": "dummy_2",
-          "fullPath": "still_testing/dummy_2",
+          "name": "test-project-2",
+          "fullPath": "test-group/test-subgroup/test-project-2",
           "maxAccessLevel": {
             "stringValue": "REPORTER"
           }
         },
         {
-          "name": "dummy_3",
-          "fullPath": "guess_what_still_testing/dummy_3",
+          "name": "test-project-3",
+          "fullPath": "test-group/test-subgroup-2/test-project-3",
           "maxAccessLevel": {
             "stringValue": "REPORTER"
           }

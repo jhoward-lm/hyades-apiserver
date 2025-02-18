@@ -3,8 +3,8 @@
     "projects": {
       "nodes": [
         {
-          "name": "dummy_4",
-          "fullPath": "last_one/dummy_4",
+          "name": "test-project-4",
+          "fullPath": "test-group/test-subgroup-2/test-project-4",
           "maxAccessLevel": {
             "stringValue": "DEVELOPER"
           }

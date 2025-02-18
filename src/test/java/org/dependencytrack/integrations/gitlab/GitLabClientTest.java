@@ -11,8 +11,7 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.net.URISyntaxException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -24,6 +23,8 @@ import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
+
+import static org.testcontainers.shaded.org.apache.commons.io.IOUtils.resourceToString;
 
 public class GitLabClientTest {
 
@@ -42,27 +43,25 @@ public class GitLabClientTest {
 
         @Test
         public void testGetGitLabProjects() throws URISyntaxException, IOException {
-                String accessToken = "I_AM_AN_ACCESS_TOKEN";
+                String accessToken = "TEST_ACCESS_TOKEN";
 
-                String result = Files
-                                .readString(Paths.get(
-                                                "src/test/java/org/dependencytrack/integrations/gitlab/ResponseData_1.json"));
-                String result2 = Files
-                                .readString(Paths.get(
-                                                "src/test/java/org/dependencytrack/integrations/gitlab/ResponseData_2.json"));
+                String page1Result = resourceToString("/unit/gitlab-api-getgitlabprojects-response-page-1.json",
+                                StandardCharsets.UTF_8);
+                String page2Result = resourceToString("/unit/gitlab-api-getgitlabprojects-response-page-2.json",
+                                StandardCharsets.UTF_8);
 
                 WireMock.stubFor(WireMock.post("/api/graphql")
                                 .inScenario("test-get-gitlab-projects")
                                 .whenScenarioStateIs(Scenario.STARTED)
                                 .willReturn(WireMock.ok().withHeader(HttpHeaders.CONTENT_TYPE, "application/json")
-                                                .withBody(result))
+                                                .withBody(page1Result))
                                 .willSetStateTo("second-page"));
 
                 WireMock.stubFor(WireMock.post("/api/graphql")
                                 .inScenario("test-get-gitlab-projects")
                                 .whenScenarioStateIs("second-page")
                                 .willReturn(WireMock.ok().withHeader(HttpHeaders.CONTENT_TYPE, "application/json")
-                                                .withBody(result2))
+                                                .withBody(page2Result))
                                 .willSetStateTo("Finished"));
 
                 final var configMock = mock(Config.class);
@@ -79,10 +78,10 @@ public class GitLabClientTest {
                 }
 
                 List<String> expectedProjectPaths = Arrays.asList(
-                                "testing/dummy_1",
-                                "still_testing/dummy_2",
-                                "guess_what_still_testing/dummy_3",
-                                "last_one/dummy_4");
+                                "test-group/test-subgroup/test-project-1",
+                                "test-group/test-subgroup/test-project-2",
+                                "test-group/test-subgroup-2/test-project-3",
+                                "test-group/test-subgroup-2/test-project-4");
 
                 Assert.assertEquals(actualProjectPaths, expectedProjectPaths);
         }
