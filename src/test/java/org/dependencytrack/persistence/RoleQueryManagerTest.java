@@ -19,11 +19,9 @@
 package org.dependencytrack.persistence;
 
 import org.dependencytrack.model.Project;
-import org.dependencytrack.model.ProjectRole;
-import org.dependencytrack.model.ProjectRole.LdapUserProjectRole;
-import org.dependencytrack.model.ProjectRole.ManagedUserProjectRole;
-import org.dependencytrack.model.ProjectRole.OidcUserProjectRole;
 import org.dependencytrack.model.Role;
+import org.dependencytrack.persistence.jdbi.JdbiFactory;
+import org.dependencytrack.persistence.jdbi.RoleDao;
 import org.jdbi.v3.core.Jdbi;
 
 import alpine.Config;
@@ -37,28 +35,19 @@ import static org.mockito.Mockito.when;
 import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 import org.dependencytrack.PersistenceCapableTest;
 import org.dependencytrack.common.ConfigKey;
-import org.dependencytrack.event.kafka.KafkaProducerInitializer;
 import org.junit.After;
-import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Rule;
 import org.junit.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
-
-import com.github.tomakehurst.wiremock.junit.WireMockRule;
 
 public class RoleQueryManagerTest extends PersistenceCapableTest {
 
@@ -85,19 +74,6 @@ public class RoleQueryManagerTest extends PersistenceCapableTest {
             postgresContainer.stop();
         }
     }
-
-    // @BeforeClass
-    // public static void beforeClass() {
-    // Config.enableUnitTests();
-    // }
-
-    // @AfterClass
-    // public static void afterClass() {
-    // KafkaProducerInitializer.tearDown();
-    // }
-
-    // @Rule
-    // public WireMockRule wireMockRule = new WireMockRule();
 
     @Test
     public void testGetUserProjectPermissions() throws ParseException {
@@ -143,6 +119,7 @@ public class RoleQueryManagerTest extends PersistenceCapableTest {
         DateFormat dateFormatter = new SimpleDateFormat("yyyyMMdd");
         testUser.setLastPasswordChange(dateFormatter.parse("20250324"));
         testUser.setPassword("password");
+        testUser.setPermissions(expectedPermissionsList);
         qm.persist(testUser);
 
         final var maintainerRole = new Role();
@@ -151,21 +128,25 @@ public class RoleQueryManagerTest extends PersistenceCapableTest {
         maintainerRole.setPermissions(expectedPermissions);
         qm.persist(maintainerRole);
 
-        // final var ldapUserProjectRole = new LdapUserProjectRole();
-        // ldapUserProjectRole.setProject(testProject);
+        JdbiFactory.withJdbiHandle(
+                handle -> handle.attach(RoleDao.class).addPermissionToRole(
+                        maintainerRole.getId(),
+                        readPermission.getId()));
 
-        final var managedUserProjectRole = new ManagedUserProjectRole();
-        // managedUserProjectRole.setId(1);
-        managedUserProjectRole.setProject(testProject);
-        managedUserProjectRole.setManagedUsers(Arrays.asList(testUser));
-        managedUserProjectRole.setRole(maintainerRole);
-        // qm.persist(managedUserProjectRole);
+        JdbiFactory.withJdbiHandle(
+                handle -> handle.attach(RoleDao.class).addPermissionToRole(
+                        maintainerRole.getId(),
+                        writePermission.getId()));
 
-        // final var oidcUserProjectRole = new OidcUserProjectRole();
+        JdbiFactory.withJdbiHandle(
+                handle -> handle.attach(RoleDao.class).addRoleToUser(
+                        testUser.getClass(),
+                        testUser.getId(),
+                        testProject.getId(),
+                        maintainerRole.getId()));
 
         List<Permission> actualPermissions = qm.getUserProjectPermissions("test-user", "test-project");
 
         Assert.assertEquals(actualPermissions, expectedPermissionsList);
     }
-
 }
