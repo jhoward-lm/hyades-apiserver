@@ -18,13 +18,9 @@
  */
 package org.dependencytrack.persistence;
 
-import alpine.model.ApiKey;
-import alpine.model.Team;
-import alpine.model.UserPrincipal;
 import alpine.persistence.PaginatedResult;
 import alpine.resources.AlpineRequest;
 import org.dependencytrack.model.Component;
-import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.License;
 import org.dependencytrack.model.LicenseGroup;
 import org.dependencytrack.model.Policy;
@@ -97,71 +93,6 @@ final class PolicyQueryManager extends QueryManager implements IQueryManager {
             query.setOrdering("name asc");
         }
         return query.executeList();
-    }
-
-    /**
-     * Fetch all {@link Policy}s that are applicable to a given {@link Project}.
-     *
-     * @param project The {@link Project} to fetch {@link Policy}s for
-     * @return A {@link List} of {@link Policy}s.
-     * @since 5.0.0
-     */
-    public List<Policy> getApplicablePolicies(final Project project) {
-        var filter = """
-                (this.projects.isEmpty() && this.tags.isEmpty())
-                    || (this.projects.contains(:project)
-                """;
-        var params = new HashMap<String, Object>();
-        params.put("project", project);
-
-        // To compensate for missing support for recursion of Common Table Expressions (CTEs)
-        // in JDO, we have to fetch the UUIDs of all parent projects upfront. Otherwise, we'll
-        // not be able to evaluate whether the policy is inherited from parent projects.
-        var variables = "";
-        final List<UUID> parentUuids = getParents(project);
-        if (!parentUuids.isEmpty()) {
-            filter += """
-                    || (this.includeChildren
-                        && this.projects.contains(parentVar)
-                        && :parentUuids.contains(parentVar.uuid))
-                    """;
-            variables += "org.dependencytrack.model.Project parentVar";
-            params.put("parentUuids", parentUuids);
-        }
-        filter += ")";
-
-        // DataNucleus generates an invalid SQL query when using the idiomatic solution.
-        // The following works, but it's ugly and likely doesn't perform well if the project
-        // has many tags. Worth trying the idiomatic way again once DN has been updated to > 6.0.4.
-        //
-        // filter += "m|| (this.tags.contains(commonTag) && :project.tags.contains(commonTag))";
-        // variables += "org.dependencytrack.model.Tag commonTag";
-        if (project.getTags() != null && !project.getTags().isEmpty()) {
-            filter += " || (";
-            for (int i = 0; i < project.getTags().size(); i++) {
-                filter += "this.tags.contains(:tag" + i + ")";
-                params.put("tag" + i, project.getTags().get(i));
-                if (i < (project.getTags().size() - 1)) {
-                    filter += " || ";
-                }
-            }
-            filter += ")";
-        }
-
-        final List<Policy> policies;
-        final Query<Policy> query = pm.newQuery(Policy.class);
-        try {
-            query.setFilter(filter);
-            query.setNamedParameters(params);
-            if (!variables.isEmpty()) {
-                query.declareVariables(variables);
-            }
-            policies = List.copyOf(query.executeList());
-        } finally {
-            query.closeAll();
-        }
-
-        return policies;
     }
 
     /**
@@ -804,43 +735,4 @@ final class PolicyQueryManager extends QueryManager implements IQueryManager {
         }
     }
 
-    @Override
-    void preprocessACLs(final Query<?> query, final String inputFilter, final Map<String, Object> params, final boolean bypass) {
-        if (super.principal != null && isEnabled(ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED) && !bypass) {
-            final List<Team> teams;
-            if (super.principal instanceof UserPrincipal) {
-                final UserPrincipal userPrincipal = ((UserPrincipal) super.principal);
-                teams = userPrincipal.getTeams();
-                if (super.hasAccessManagementPermission(userPrincipal)) {
-                    query.setFilter(inputFilter);
-                    return;
-                }
-            } else {
-                final ApiKey apiKey = ((ApiKey) super.principal);
-                teams = apiKey.getTeams();
-                if (super.hasAccessManagementPermission(apiKey)) {
-                    query.setFilter(inputFilter);
-                    return;
-                }
-            }
-            if (teams != null && teams.size() > 0) {
-                final StringBuilder sb = new StringBuilder();
-                for (int i = 0, teamsSize = teams.size(); i < teamsSize; i++) {
-                    final Team team = super.getObjectById(Team.class, teams.get(i).getId());
-                    sb.append(" project.accessTeams.contains(:team").append(i).append(") ");
-                    params.put("team" + i, team);
-                    if (i < teamsSize-1) {
-                        sb.append(" || ");
-                    }
-                }
-                if (inputFilter != null) {
-                    query.setFilter(inputFilter + " && (" + sb.toString() + ")");
-                } else {
-                    query.setFilter(sb.toString());
-                }
-            }
-        } else {
-            query.setFilter(inputFilter);
-        }
-    }
 }

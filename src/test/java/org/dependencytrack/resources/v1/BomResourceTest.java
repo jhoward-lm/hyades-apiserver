@@ -23,18 +23,13 @@ import alpine.model.IConfigProperty;
 import alpine.server.filters.ApiFilter;
 import alpine.server.filters.AuthenticationFilter;
 import com.fasterxml.jackson.core.StreamReadConstraints;
-import jakarta.json.JsonObject;
-import jakarta.ws.rs.client.ClientBuilder;
-import jakarta.ws.rs.client.Entity;
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import junitparams.JUnitParamsRunner;
 import junitparams.Parameters;
 import net.javacrumbs.jsonunit.core.Option;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.HttpStatus;
-import org.assertj.core.api.AssertionsForClassTypes;
+import org.cyclonedx.proto.v1_6.Bom;
 import org.dependencytrack.JerseyTestRule;
 import org.dependencytrack.ResourceTest;
 import org.dependencytrack.auth.Permissions;
@@ -45,6 +40,7 @@ import org.dependencytrack.model.AnalyzerIdentity;
 import org.dependencytrack.model.BomValidationMode;
 import org.dependencytrack.model.Classifier;
 import org.dependencytrack.model.Component;
+import org.dependencytrack.model.ComponentOccurrence;
 import org.dependencytrack.model.ComponentProperty;
 import org.dependencytrack.model.OrganizationalContact;
 import org.dependencytrack.model.OrganizationalEntity;
@@ -57,7 +53,7 @@ import org.dependencytrack.model.Vulnerability;
 import org.dependencytrack.model.WorkflowStep;
 import org.dependencytrack.notification.NotificationConstants;
 import org.dependencytrack.parser.cyclonedx.CycloneDxValidator;
-import org.dependencytrack.resources.v1.exception.JsonMappingExceptionMapper;
+import org.dependencytrack.proto.notification.v1.BomValidationFailedSubject;
 import org.dependencytrack.resources.v1.vo.BomSubmitRequest;
 import org.glassfish.jersey.client.ClientConfig;
 import org.glassfish.jersey.client.HttpUrlConnectorProvider;
@@ -67,9 +63,16 @@ import org.glassfish.jersey.server.ResourceConfig;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.ClassRule;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.contrib.java.lang.system.EnvironmentVariables;
 import org.junit.runner.RunWith;
 
+import jakarta.json.JsonObject;
+import jakarta.ws.rs.client.ClientBuilder;
+import jakarta.ws.rs.client.Entity;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -85,7 +88,9 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -112,8 +117,12 @@ public class BomResourceTest extends ResourceTest {
             new ResourceConfig(BomResource.class)
                     .register(ApiFilter.class)
                     .register(AuthenticationFilter.class)
-                    .register(MultiPartFeature.class)
-                    .register(JsonMappingExceptionMapper.class));
+                    .register(MultiPartFeature.class));
+
+    @Rule
+    public final EnvironmentVariables environmentVariables = new EnvironmentVariables()
+            .set("FILE_STORAGE_EXTENSION_MEMORY_ENABLED", "true")
+            .set("FILE_STORAGE_DEFAULT_EXTENSION", "memory");
 
     @Before
     @Override
@@ -147,6 +156,37 @@ public class BomResourceTest extends ResourceTest {
         Assert.assertNull(response.getHeaderString(TOTAL_COUNT_HEADER));
         String body = getPlainTextBody(response);
         Assert.assertEquals("The project could not be found.", body);
+    }
+
+    @Test
+    public void exportProjectAsCycloneDxAclTest() {
+        enablePortfolioAccessControl();
+
+        final var project = new Project();
+        project.setName("acme-app");
+        qm.persist(project);
+
+        final Supplier<Response> responseSupplier = () -> jersey
+                .target(V1_BOM + "/cyclonedx/project/" + project.getUuid())
+                .queryParam("variant", "inventory")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get(Response.class);
+
+        Response response = responseSupplier.get();
+        assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_FORBIDDEN);
+        assertThatJson(getPlainTextBody(response)).isEqualTo(/* language=JSON */ """
+                {
+                  "status": 403,
+                  "title": "Project access denied",
+                  "detail": "Access to the requested project is forbidden"
+                }
+                """);
+
+        project.addAccessTeam(super.team);
+
+        response = responseSupplier.get();
+        assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
     }
 
     @Test
@@ -201,6 +241,16 @@ public class BomResourceTest extends ResourceTest {
         componentWithoutVuln.setSupplier(componentSupplier);
         componentWithoutVuln.setDirectDependencies("[]");
         componentWithoutVuln = qm.createComponent(componentWithoutVuln, false);
+
+        // NB: Line, offset, and symbol are only supported since CycloneDX v1.6,
+        // and will not show up in this export since it's still in v1.5 format.
+        final var componentOccurrence = new ComponentOccurrence();
+        componentOccurrence.setComponent(componentWithoutVuln);
+        componentOccurrence.setLocation("/foo/bar");
+        componentOccurrence.setLine(666);
+        componentOccurrence.setOffset(123);
+        componentOccurrence.setSymbol("someSymbol");
+        qm.persist(componentOccurrence);
 
         final var componentProperty = new ComponentProperty();
         componentProperty.setComponent(componentWithoutVuln);
@@ -263,7 +313,7 @@ public class BomResourceTest extends ResourceTest {
                 .withMatcher("componentWithoutVulnUuid", equalTo(componentWithoutVuln.getUuid().toString()))
                 .withMatcher("componentWithVulnUuid", equalTo(componentWithVuln.getUuid().toString()))
                 .withMatcher("componentWithVulnAndAnalysisUuid", equalTo(componentWithVulnAndAnalysis.getUuid().toString()))
-                .isEqualTo(json("""
+                .isEqualTo(json(/* language=JSON */ """
                         {
                             "bomFormat": "CycloneDX",
                             "specVersion": "1.5",
@@ -309,6 +359,13 @@ public class BomResourceTest extends ResourceTest {
                                     },
                                     "name": "acme-lib-a",
                                     "version": "1.0.0",
+                                    "evidence": {
+                                      "occurrences": [
+                                        {
+                                          "location": "/foo/bar"
+                                        }
+                                      ]
+                                    },
                                     "properties": [
                                       {
                                         "name": "foo:bar",
@@ -851,6 +908,42 @@ public class BomResourceTest extends ResourceTest {
     }
 
     @Test
+    public void exportComponentAsCycloneDxAclTest() {
+        enablePortfolioAccessControl();
+
+        final var project = new Project();
+        project.setName("acme-app");
+        qm.persist(project);
+
+        final var component = new Component();
+        component.setProject(project);
+        component.setName("acme-lib");
+        qm.persist(component);
+
+        final Supplier<Response> responseSupplier = () -> jersey
+                .target(V1_BOM + "/cyclonedx/component/" + component.getUuid())
+                .queryParam("variant", "inventory")
+                .request()
+                .header(X_API_KEY, apiKey)
+                .get(Response.class);
+
+        Response response = responseSupplier.get();
+        assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_FORBIDDEN);
+        assertThatJson(getPlainTextBody(response)).isEqualTo(/* language=JSON */ """
+                {
+                  "status": 403,
+                  "title": "Project access denied",
+                  "detail": "Access to the requested project is forbidden"
+                }
+                """);
+
+        project.addAccessTeam(super.team);
+
+        response = responseSupplier.get();
+        assertThat(response.getStatus()).isEqualTo(HttpStatus.SC_OK);
+    }
+
+    @Test
     public void uploadBomTest() throws Exception {
         initializeWithPermissions(Permissions.BOM_UPLOAD);
         Project project = qm.createProject("Acme Example", null, "1.0", null, null, null, null, false);
@@ -1104,7 +1197,7 @@ public class BomResourceTest extends ResourceTest {
                 .put(Entity.entity(request, MediaType.APPLICATION_JSON));
         Assert.assertEquals(404, response.getStatus(), 0);
         String body = getPlainTextBody(response);
-        Assert.assertEquals("The parent component could not be found.", body);
+        Assert.assertEquals("The parent project could not be found.", body);
 
         request = new BomSubmitRequest(null, "Acme Example", "2.0", null, true, null, "Non-existent parent", null, false, bomString);
         response = jersey.target(V1_BOM).request()
@@ -1112,7 +1205,7 @@ public class BomResourceTest extends ResourceTest {
                 .put(Entity.entity(request, MediaType.APPLICATION_JSON));
         Assert.assertEquals(404, response.getStatus(), 0);
         body = getPlainTextBody(response);
-        Assert.assertEquals("The parent component could not be found.", body);
+        Assert.assertEquals("The parent project could not be found.", body);
     }
 
     @SuppressWarnings("unused")
@@ -1149,7 +1242,7 @@ public class BomResourceTest extends ResourceTest {
     }
 
     @Test
-    public void uploadBomInvalidJsonTest() throws InterruptedException {
+    public void uploadBomInvalidJsonTest() throws Exception {
         initializeWithPermissions(Permissions.BOM_UPLOAD);
 
         final var project = new Project();
@@ -1196,17 +1289,28 @@ public class BomResourceTest extends ResourceTest {
                 """);
 
         assertThat(kafkaMockProducer.history()).hasSize(1);
-        final org.dependencytrack.proto.notification.v1.Notification userNotification = deserializeValue(KafkaTopics.NOTIFICATION_USER, kafkaMockProducer.history().get(0));
-        AssertionsForClassTypes.assertThat(userNotification).isNotNull();
-        AssertionsForClassTypes.assertThat(userNotification.getScope()).isEqualTo(SCOPE_PORTFOLIO);
-        AssertionsForClassTypes.assertThat(userNotification.getGroup()).isEqualTo(GROUP_BOM_VALIDATION_FAILED);
-        AssertionsForClassTypes.assertThat(userNotification.getLevel()).isEqualTo(LEVEL_ERROR);
-        AssertionsForClassTypes.assertThat(userNotification.getTitle()).isEqualTo(NotificationConstants.Title.BOM_VALIDATION_FAILED);
-        AssertionsForClassTypes.assertThat(userNotification.getContent()).isEqualTo("An error occurred while validating a BOM");
+        final org.dependencytrack.proto.notification.v1.Notification validationFailureNotification =
+                deserializeValue(KafkaTopics.NOTIFICATION_BOM, kafkaMockProducer.history().getFirst());
+        assertThat(validationFailureNotification).isNotNull();
+        assertThat(validationFailureNotification.getScope()).isEqualTo(SCOPE_PORTFOLIO);
+        assertThat(validationFailureNotification.getGroup()).isEqualTo(GROUP_BOM_VALIDATION_FAILED);
+        assertThat(validationFailureNotification.getLevel()).isEqualTo(LEVEL_ERROR);
+        assertThat(validationFailureNotification.getTitle()).isEqualTo(NotificationConstants.Title.BOM_VALIDATION_FAILED);
+        assertThat(validationFailureNotification.getContent()).isEqualTo("An error occurred while validating a BOM");
+        assertThat(validationFailureNotification.getSubject().is(BomValidationFailedSubject.class)).isTrue();
+
+        final var subject = validationFailureNotification.getSubject().unpack(BomValidationFailedSubject.class);
+        assertThat(subject.getBom().getFormat()).isEmpty();
+        assertThat(subject.getBom().getSpecVersion()).isEmpty();
+        assertThat(subject.getBom().getContent()).isEqualTo("(Omitted)");
+        assertThat(subject.getErrorsList()).containsOnly("""
+                $.components[0].type: does not have a value in the enumeration \
+                ["application", "framework", "library", "container", "operating-system", \
+                "device", "firmware", "file"]""");
     }
 
     @Test
-    public void uploadBomInvalidXmlTest() throws InterruptedException {
+    public void uploadBomInvalidXmlTest() throws Exception {
         initializeWithPermissions(Permissions.BOM_UPLOAD);
 
         final var project = new Project();
@@ -1250,13 +1354,23 @@ public class BomResourceTest extends ResourceTest {
                 """);
 
         assertThat(kafkaMockProducer.history()).hasSize(1);
-        final org.dependencytrack.proto.notification.v1.Notification userNotification = deserializeValue(KafkaTopics.NOTIFICATION_USER, kafkaMockProducer.history().get(0));
-        AssertionsForClassTypes.assertThat(userNotification).isNotNull();
-        AssertionsForClassTypes.assertThat(userNotification.getScope()).isEqualTo(SCOPE_PORTFOLIO);
-        AssertionsForClassTypes.assertThat(userNotification.getGroup()).isEqualTo(GROUP_BOM_VALIDATION_FAILED);
-        AssertionsForClassTypes.assertThat(userNotification.getLevel()).isEqualTo(LEVEL_ERROR);
-        AssertionsForClassTypes.assertThat(userNotification.getTitle()).isEqualTo(NotificationConstants.Title.BOM_VALIDATION_FAILED);
-        AssertionsForClassTypes.assertThat(userNotification.getContent()).isEqualTo("An error occurred while validating a BOM");
+        final org.dependencytrack.proto.notification.v1.Notification validationFailureNotification =
+                deserializeValue(KafkaTopics.NOTIFICATION_BOM, kafkaMockProducer.history().getFirst());
+        assertThat(validationFailureNotification).isNotNull();
+        assertThat(validationFailureNotification.getScope()).isEqualTo(SCOPE_PORTFOLIO);
+        assertThat(validationFailureNotification.getGroup()).isEqualTo(GROUP_BOM_VALIDATION_FAILED);
+        assertThat(validationFailureNotification.getLevel()).isEqualTo(LEVEL_ERROR);
+        assertThat(validationFailureNotification.getTitle()).isEqualTo(NotificationConstants.Title.BOM_VALIDATION_FAILED);
+        assertThat(validationFailureNotification.getContent()).isEqualTo("An error occurred while validating a BOM");
+        assertThat(validationFailureNotification.getSubject().is(BomValidationFailedSubject.class)).isTrue();
+
+        final var subject = validationFailureNotification.getSubject().unpack(BomValidationFailedSubject.class);
+        assertThat(subject.getBom().getFormat()).isEmpty();
+        assertThat(subject.getBom().getSpecVersion()).isEmpty();
+        assertThat(subject.getBom().getContent()).isEqualTo("(Omitted)");
+        assertThat(subject.getErrorsList()).containsExactlyInAnyOrder(
+                "cvc-enumeration-valid: Value 'foo' is not facet-valid with respect to enumeration '[application, framework, library, container, operating-system, device, firmware, file]'. It must be a value from the enumeration.",
+                "cvc-attribute.3: The value 'foo' of attribute 'type' on element 'component' is not valid with respect to its type, 'classification'.");
     }
 
     @Test
@@ -1321,6 +1435,37 @@ public class BomResourceTest extends ResourceTest {
         assertThat(project.getTags())
                 .extracting(Tag::getName)
                 .containsExactlyInAnyOrder("tag1", "tag2");
+    }
+
+    @Test
+    public void uploadBomProtobufFormatTest() {
+        initializeWithPermissions(Permissions.BOM_UPLOAD, Permissions.PROJECT_CREATION_UPLOAD);
+        final var project = qm.createProject("Acme Example", null, "1.0", null, null, null, null, false);
+        final var bomProto = Bom.newBuilder().setSpecVersion("1.6").build();
+        final var multiPart = new FormDataMultiPart()
+                .field("project", project.getUuid().toString())
+                .field("bom", bomProto.toByteArray(), new MediaType("application", "x.vnd.cyclonedx+protobuf"))
+                .field("autoCreate", "true");
+
+        // NB: The GrizzlyConnectorProvider doesn't work with MultiPart requests.
+        // https://github.com/eclipse-ee4j/jersey/issues/5094
+        final var client = ClientBuilder.newClient(new ClientConfig()
+                .register(MultiPartFeature.class)
+                .connectorProvider(new HttpUrlConnectorProvider()));
+
+        final Response response = client.target(jersey.target(V1_BOM).getUri()).request()
+                .header(X_API_KEY, apiKey)
+                .post(Entity.entity(multiPart, multiPart.getMediaType()));
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThatJson(getPlainTextBody(response)).isEqualTo("""
+                {
+                  "token": "${json-unit.any-string}"
+                }
+                """);
+
+        final var projectResponse = qm.getProject("Acme Example", "1.0");
+        assertThat(projectResponse).isNotNull();
+        assertThat(projectResponse.getName()).isEqualTo(project.getName());
     }
 
     @Test
@@ -1613,7 +1758,7 @@ public class BomResourceTest extends ResourceTest {
         accessLatestProject.setName("acme-app-a");
         accessLatestProject.setVersion("1.0.0");
         accessLatestProject.setIsLatest(true);
-        accessLatestProject.setAccessTeams(List.of(team));
+        accessLatestProject.setAccessTeams(Set.of(team));
         qm.persist(accessLatestProject);
 
         String bomString = Base64.getEncoder().encodeToString(resourceToByteArray("/unit/bom-1.xml"));

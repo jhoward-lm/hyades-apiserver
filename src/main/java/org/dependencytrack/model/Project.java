@@ -35,14 +35,14 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.github.packageurl.MalformedPackageURLException;
 import com.github.packageurl.PackageURL;
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
-import jakarta.validation.constraints.Size;
 import org.dependencytrack.persistence.converter.OrganizationalContactsJsonConverter;
 import org.dependencytrack.persistence.converter.OrganizationalEntityJsonConverter;
 import org.dependencytrack.resources.v1.serializers.CustomPackageURLSerializer;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import javax.jdo.annotations.Column;
 import javax.jdo.annotations.Convert;
 import javax.jdo.annotations.Element;
@@ -50,6 +50,8 @@ import javax.jdo.annotations.Extension;
 import javax.jdo.annotations.Extensions;
 import javax.jdo.annotations.FetchGroup;
 import javax.jdo.annotations.FetchGroups;
+import javax.jdo.annotations.ForeignKey;
+import javax.jdo.annotations.ForeignKeyAction;
 import javax.jdo.annotations.IdGeneratorStrategy;
 import javax.jdo.annotations.Index;
 import javax.jdo.annotations.Join;
@@ -61,10 +63,11 @@ import javax.jdo.annotations.Serialized;
 import javax.jdo.annotations.Unique;
 import java.io.IOException;
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -248,6 +251,7 @@ public class Project implements Serializable {
     private UUID uuid;
 
     @Persistent
+    @ForeignKey(name = "PROJECT_PROJECT_FK", updateAction = ForeignKeyAction.NONE, deleteAction = ForeignKeyAction.CASCADE, deferred = "true")
     @Column(name = "PARENT_PROJECT_ID")
     @JsonIncludeProperties(value = {"name", "version", "uuid"})
     private Project parent;
@@ -255,13 +259,14 @@ public class Project implements Serializable {
     @Persistent(mappedBy = "parent")
     private Collection<Project> children;
 
-    @Persistent(mappedBy = "project", defaultFetchGroup = "true")
+    @Persistent(mappedBy = "project")
     @Order(extensions = @Extension(vendorName = "datanucleus", key = "list-ordering", value = "groupName ASC, propertyName ASC"))
+    @JsonIgnore
     private List<ProjectProperty> properties;
 
     @Persistent(table = "PROJECTS_TAGS", defaultFetchGroup = "true", mappedBy = "projects")
-    @Join(column = "PROJECT_ID")
-    @Element(column = "TAG_ID")
+    @Join(column = "PROJECT_ID", foreignKey = "PROJECTS_TAGS_PROJECT_FK", deleteAction = ForeignKeyAction.CASCADE)
+    @Element(column = "TAG_ID", foreignKey = "PROJECTS_TAGS_TAG_FK", deleteAction = ForeignKeyAction.CASCADE)
     @Order(extensions = @Extension(vendorName = "datanucleus", key = "list-ordering", value = "name ASC"))
     private List<Tag> tags;
 
@@ -296,11 +301,10 @@ public class Project implements Serializable {
             type = "integer", format = "int64", description = "UNIX epoch timestamp in milliseconds")
     private Date inactiveSince;
 
-    @Persistent(table = "PROJECT_ACCESS_TEAMS", defaultFetchGroup = "true")
-    @Join(column = "PROJECT_ID")
+    @Persistent(table = "PROJECT_ACCESS_TEAMS")
+    @Join(column = "PROJECT_ID", primaryKey = "PROJECT_ACCESS_TEAMS_PK")
     @Element(column = "TEAM_ID")
-    @Order(extensions = @Extension(vendorName = "datanucleus", key = "list-ordering", value = "name ASC"))
-    private List<Team> accessTeams;
+    private Set<Team> accessTeams;
 
     @Persistent(defaultFetchGroup = "true")
     @Column(name = "EXTERNAL_REFERENCES")
@@ -569,20 +573,28 @@ public class Project implements Serializable {
     }
 
     @JsonIgnore
-    public List<Team> getAccessTeams() {
+    public Set<Team> getAccessTeams() {
         return accessTeams;
     }
 
     @JsonSetter
-    public void setAccessTeams(List<Team> accessTeams) {
+    public void setAccessTeams(Set<Team> accessTeams) {
         this.accessTeams = accessTeams;
     }
 
-    public void addAccessTeam(Team accessTeam) {
+    public boolean addAccessTeam(Team accessTeam) {
         if (this.accessTeams == null) {
-            this.accessTeams = new ArrayList<>();
+            this.accessTeams = new HashSet<>();
         }
-        this.accessTeams.add(accessTeam);
+        return this.accessTeams.add(accessTeam);
+    }
+
+    public boolean removeAccessTeam(Team accessTeam) {
+        if (this.accessTeams == null) {
+            return false;
+        }
+
+        return this.accessTeams.remove(accessTeam);
     }
 
     public ProjectMetadata getMetadata() {

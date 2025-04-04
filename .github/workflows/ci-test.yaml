@@ -84,7 +84,7 @@ jobs:
 
       - name: Upload PR test coverage report
         if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # tag=v4.4.0
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # tag=v4.4.0
         with:
           name: pr-test-coverage-report
           path: |-

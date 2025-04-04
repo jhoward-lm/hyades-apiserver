@@ -39,6 +39,8 @@ import org.dependencytrack.model.Analysis;
 import org.dependencytrack.model.AnalysisComment;
 import org.dependencytrack.model.Classifier;
 import org.dependencytrack.model.Component;
+import org.dependencytrack.model.ComponentOccurrence;
+import org.dependencytrack.model.ComponentProperty;
 import org.dependencytrack.model.ConfigPropertyConstants;
 import org.dependencytrack.model.FindingAttribution;
 import org.dependencytrack.model.PolicyViolation;
@@ -418,17 +420,6 @@ final class ProjectQueryManager extends QueryManager implements IQueryManager {
         return result;
     }
 
-    /**
-     * Returns a paginated result of projects by tag.
-     *
-     * @param tag the tag associated with the Project
-     * @return a List of Projects that contain the tag
-     */
-    @Override
-    public PaginatedResult getProjects(final Tag tag) {
-        return getProjects(tag, false, false, false);
-    }
-
     @Override
     public Project createProject(String name, String description, String version, List<Tag> tags, Project parent,
                                  PackageURL purl, Date inactiveSince, boolean commitIndex) {
@@ -669,6 +660,41 @@ final class ProjectQueryManager extends QueryManager implements IQueryManager {
                 if (sourceComponents != null) {
                     for (final Component sourceComponent : sourceComponents) {
                         final Component clonedComponent = cloneComponent(sourceComponent, project, false);
+
+                        if (sourceComponent.getOccurrences() != null && !sourceComponent.getOccurrences().isEmpty()) {
+                            final var clonedOccurrences = new HashSet<ComponentOccurrence>(sourceComponent.getOccurrences().size());
+                            for (final ComponentOccurrence sourceOccurrence : sourceComponent.getOccurrences()) {
+                                final var clonedOccurrence = new ComponentOccurrence();
+                                clonedOccurrence.setComponent(clonedComponent);
+                                clonedOccurrence.setLocation(sourceOccurrence.getLocation());
+                                clonedOccurrence.setLine(sourceOccurrence.getLine());
+                                clonedOccurrence.setOffset(sourceOccurrence.getOffset());
+                                clonedOccurrence.setSymbol(sourceOccurrence.getSymbol());
+                                clonedOccurrence.setCreatedAt(sourceOccurrence.getCreatedAt());
+                                clonedOccurrences.add(clonedOccurrence);
+                            }
+
+                            persist(clonedOccurrences);
+                            clonedComponent.setOccurrences(clonedOccurrences);
+                        }
+
+                        if (sourceComponent.getProperties() != null && !sourceComponent.getProperties().isEmpty()) {
+                            final var clonedProperties = new ArrayList<ComponentProperty>(sourceComponent.getProperties().size());
+                            for (final ComponentProperty sourceProperty : sourceComponent.getProperties()) {
+                                final ComponentProperty clonedProperty = new ComponentProperty();
+                                clonedProperty.setComponent(clonedComponent);
+                                clonedProperty.setPropertyType(sourceProperty.getPropertyType());
+                                clonedProperty.setGroupName(sourceProperty.getGroupName());
+                                clonedProperty.setPropertyName(sourceProperty.getPropertyName());
+                                clonedProperty.setPropertyValue(sourceProperty.getPropertyValue());
+                                clonedProperty.setDescription(sourceProperty.getDescription());
+                                clonedProperties.add(clonedProperty);
+                            }
+
+                            persist(clonedProperties);
+                            clonedComponent.setProperties(clonedProperties);
+                        }
+
                         // Add vulnerabilties and finding attribution from the source component to the cloned component
                         for (Vulnerability vuln : sourceComponent.getVulnerabilities()) {
                             final FindingAttribution sourceAttribution = this.getFindingAttribution(vuln, sourceComponent);
@@ -777,9 +803,9 @@ final class ProjectQueryManager extends QueryManager implements IQueryManager {
             }
 
             if (includeACL) {
-                List<Team> accessTeams = source.getAccessTeams();
+                Set<Team> accessTeams = source.getAccessTeams();
                 if (!CollectionUtils.isEmpty(accessTeams)) {
-                    project.setAccessTeams(new ArrayList<>(accessTeams));
+                    project.setAccessTeams(new HashSet<>(accessTeams));
                 }
             }
 
@@ -923,48 +949,25 @@ final class ProjectQueryManager extends QueryManager implements IQueryManager {
         bind(project, tags, /* keepExisting */ false);
     }
 
-    /**
-     * Updates the last time a bom was imported.
-     *
-     * @param date      the date of the last bom import
-     * @param bomFormat the format and version of the bom format
-     * @return the updated Project
-     */
-    @Override
-    public Project updateLastBomImport(Project p, Date date, String bomFormat) {
-        final Project project = getObjectById(Project.class, p.getId());
-        project.setLastBomImport(date);
-        project.setLastBomImportFormat(bomFormat);
-        return persist(project);
-    }
-
     @Override
     public boolean hasAccess(final Principal principal, final Project project) {
-        if (principal == null) {
-            // This is a system request being made (e.g. MetricsUpdateTask, etc) where there isn't a principal
+        if (!isEnabled(ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED)
+                || principal == null // System request (e.g. MetricsUpdateTask, etc) where there isn't a principal
+                || super.hasAccessManagementPermission(principal)) // TODO: After Alpine >= 3.2.0: request.getEffectivePermission().contains(Permissions.ACCESS_MANAGEMENT.name())
             return true;
-        }
 
-        if (!isEnabled(ConfigPropertyConstants.ACCESS_MANAGEMENT_ACL_ENABLED)) {
-            return true;
-        }
-
-        // TODO: After upgrading to Alpine >= 3.2.0, this should become:
-        //   request.getEffectivePermission().contains(Permissions.ACCESS_MANAGEMENT.name())
-        // https://github.com/stevespringett/Alpine/pull/764
-        if (super.hasAccessManagementPermission(principal)) {
-            return true;
-        }
-
+        final Set<Long> roleIds = getRoleIds(principal, project);
         final Set<Long> teamIds = getTeamIds(principal);
-        if (teamIds.isEmpty()) {
-            return false;
-        }
 
-        final Query<?> query = pm.newQuery(Query.SQL, "SELECT HAS_PROJECT_ACCESS(:projectId, :teamIds)");
+        if (teamIds.isEmpty() && roleIds.isEmpty())
+            return false;
+
+        final Query<?> query = pm.newQuery(Query.SQL, "SELECT HAS_PROJECT_ACCESS(:projectId, :teamIds, :roleIds)");
         query.setNamedParameters(Map.ofEntries(
                 Map.entry("projectId", project.getId()),
-                Map.entry("teamIds", teamIds.toArray(new Long[0]))));
+                Map.entry("teamIds", teamIds.toArray(Long[]::new)),
+                Map.entry("roleIds", roleIds.toArray(Long[]::new))));
+
         return executeAndCloseResultUnique(query, Boolean.class);
     }
 
@@ -1243,37 +1246,6 @@ final class ProjectQueryManager extends QueryManager implements IQueryManager {
     }
 
     /**
-     * Fetch the {@link UUID}s of all parents of a given {@link Project}.
-     *
-     * @param project The {@link Project} to fetch the parent {@link UUID}s for
-     * @return A {@link List} of {@link UUID}s
-     */
-    @Override
-    public List<UUID> getParents(final Project project) {
-        return getParents(project.getUuid(), new ArrayList<>());
-    }
-
-    private List<UUID> getParents(final UUID uuid, final List<UUID> parents) {
-        final UUID parentUuid;
-        final Query<Project> query = pm.newQuery(Project.class);
-        try {
-            query.setFilter("uuid == :uuid && parent != null");
-            query.setParameters(uuid);
-            query.setResult("parent.uuid");
-            parentUuid = query.executeResultUnique(UUID.class);
-        } finally {
-            query.closeAll();
-        }
-
-        if (parentUuid == null) {
-            return parents;
-        }
-
-        parents.add(parentUuid);
-        return getParents(parentUuid, parents);
-    }
-
-    /**
      * Check whether a {@link Project} with a given {@code name} and {@code version} exists.
      *
      * @param name    Name of the {@link Project} to check for
@@ -1307,30 +1279,41 @@ final class ProjectQueryManager extends QueryManager implements IQueryManager {
         }
     }
 
-    private static boolean isChildOf(Project project, UUID uuid) {
-        boolean isChild = false;
-        if (project.getParent() != null) {
-            if (project.getParent().getUuid().equals(uuid)) {
-                return true;
-            } else {
-                isChild = isChildOf(project.getParent(), uuid);
-            }
+    private boolean isChildOf(Project project, UUID uuid) {
+        final Query<?> query = pm.newQuery(Query.SQL, /* language=SQL */ """
+                SELECT EXISTS (
+                  SELECT 1
+                    FROM "PROJECT_HIERARCHY"
+                   WHERE "PARENT_PROJECT_ID" = (SELECT "ID" FROM "PROJECT" WHERE "UUID" = ?)
+                     AND "CHILD_PROJECT_ID" = ?
+                )
+                """);
+        query.setParameters(uuid, project.getId());
+        try {
+            return (boolean) query.executeUnique();
+        } finally {
+            query.closeAll();
         }
-        return isChild;
     }
 
-    private static boolean hasActiveChild(Project project) {
-        boolean hasActiveChild = false;
-        if (project.getChildren() != null) {
-            for (Project child : project.getChildren()) {
-                if (child.isActive() || hasActiveChild) {
-                    return true;
-                } else {
-                    hasActiveChild = hasActiveChild(child);
-                }
-            }
+    private boolean hasActiveChild(Project project) {
+        final Query<?> query = pm.newQuery(Query.SQL, /* language=SQL */ """
+                SELECT EXISTS (
+                  SELECT 1
+                    FROM "PROJECT_HIERARCHY" AS hierarchy
+                   INNER JOIN "PROJECT" AS child_project
+                      ON child_project."ID" = hierarchy."CHILD_PROJECT_ID"
+                   WHERE hierarchy."PARENT_PROJECT_ID" = ?
+                     AND hierarchy."DEPTH" > 0
+                     AND child_project."INACTIVE_SINCE" IS NULL
+                )
+                """);
+        query.setParameters(project.getId());
+        try {
+            return (boolean) query.executeUnique();
+        } finally {
+            query.closeAll();
         }
-        return hasActiveChild;
     }
 
     private List<ProjectVersion> getProjectVersions(Project project) {

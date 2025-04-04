@@ -26,6 +26,7 @@ import alpine.event.framework.EventService;
 import alpine.event.framework.Subscriber;
 import alpine.notification.Notification;
 import alpine.notification.NotificationLevel;
+import com.google.protobuf.InvalidProtocolBufferException;
 import org.apache.commons.collections4.MultiValuedMap;
 import org.apache.commons.collections4.multimap.HashSetValuedHashMap;
 import org.cyclonedx.exception.ParseException;
@@ -61,17 +62,15 @@ import org.dependencytrack.notification.vo.BomConsumedOrProcessed;
 import org.dependencytrack.notification.vo.BomProcessingFailed;
 import org.dependencytrack.persistence.QueryManager;
 import org.dependencytrack.persistence.jdbi.WorkflowDao;
+import org.dependencytrack.plugin.PluginManager;
+import org.dependencytrack.storage.FileStorage;
 import org.dependencytrack.util.InternalComponentIdentifier;
-import org.dependencytrack.util.WaitingLockConfiguration;
 import org.json.JSONArray;
 import org.slf4j.MDC;
 
 import javax.jdo.PersistenceManager;
 import javax.jdo.Query;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -114,10 +113,14 @@ import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertSe
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertToProject;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.convertToProjectMetadata;
 import static org.dependencytrack.parser.cyclonedx.util.ModelConverter.flatten;
+import static org.dependencytrack.parser.cyclonedx.util.ModelConverterProto.convertComponents;
+import static org.dependencytrack.parser.cyclonedx.util.ModelConverterProto.convertDependencyGraph;
+import static org.dependencytrack.parser.cyclonedx.util.ModelConverterProto.convertServices;
+import static org.dependencytrack.parser.cyclonedx.util.ModelConverterProto.convertToProject;
+import static org.dependencytrack.parser.cyclonedx.util.ModelConverterProto.convertToProjectMetadata;
 import static org.dependencytrack.persistence.jdbi.JdbiFactory.useJdbiTransaction;
 import static org.dependencytrack.proto.repometaanalysis.v1.FetchMeta.FETCH_META_INTEGRITY_DATA_AND_LATEST_VERSION;
 import static org.dependencytrack.proto.repometaanalysis.v1.FetchMeta.FETCH_META_LATEST_VERSION;
-import static org.dependencytrack.util.LockProvider.executeWithLockWaiting;
 import static org.dependencytrack.util.PersistenceUtil.applyIfChanged;
 import static org.dependencytrack.util.PersistenceUtil.assertPersistent;
 
@@ -176,33 +179,66 @@ public class BomUploadProcessingTask implements Subscriber {
         try (var ignoredMdcProjectUuid = MDC.putCloseable(MDC_PROJECT_UUID, ctx.project.getUuid().toString());
              var ignoredMdcProjectName = MDC.putCloseable(MDC_PROJECT_NAME, ctx.project.getName());
              var ignoredMdcProjectVersion = MDC.putCloseable(MDC_PROJECT_VERSION, ctx.project.getVersion());
-             var ignoredMdcBomUploadToken = MDC.putCloseable(MDC_BOM_UPLOAD_TOKEN, ctx.token.toString())) {
-            processEvent(ctx, event);
+             var ignoredMdcBomUploadToken = MDC.putCloseable(MDC_BOM_UPLOAD_TOKEN, ctx.token.toString());
+             var fileStorage = PluginManager.getInstance().getExtension(FileStorage.class)) {
+            final byte[] cdxBomBytes;
+            try {
+                cdxBomBytes = fileStorage.get(event.getFileMetadata());
+            } catch (IOException ex) {
+                LOGGER.error("Failed to retrieve BOM file %s from storage".formatted(
+                        event.getFileMetadata().getLocation()), ex);
+                return;
+            }
+
+            try {
+                processEvent(ctx, cdxBomBytes);
+            } finally {
+                // There are currently no retries, so the BOM file needs to be removed
+                // from storage no matter if processing failed or succeeded.
+
+                try {
+                    fileStorage.delete(event.getFileMetadata());
+                } catch (IOException ex) {
+                    LOGGER.error("Failed to delete BOM file %s from storage".formatted(
+                            event.getFileMetadata().getLocation()), ex);
+                }
+            }
         }
     }
 
-    private void processEvent(final Context ctx, final BomUploadEvent event) {
+    private void processEvent(final Context ctx, final byte[] cdxBomBytes) {
         useJdbiTransaction(handle -> {
             final var workflowDao = handle.attach(WorkflowDao.class);
             workflowDao.startState(WorkflowStep.BOM_CONSUMPTION, ctx.token);
         });
         final ConsumedBom consumedBom;
-        try (final var bomFileInputStream = Files.newInputStream(event.getFile().toPath(), StandardOpenOption.DELETE_ON_CLOSE)) {
-            final byte[] cdxBomBytes = bomFileInputStream.readAllBytes();
-            final Parser parser = BomParserFactory.createParser(cdxBomBytes);
-            final org.cyclonedx.model.Bom cdxBom = parser.parse(cdxBomBytes);
-
-            ctx.bomSpecVersion = cdxBom.getSpecVersion();
-            if (cdxBom.getSerialNumber() != null) {
-                ctx.bomSerialNumber = cdxBom.getSerialNumber().replaceFirst("urn:uuid:", "");
+        try {
+            // Validate if bom is in protobuf format
+            final var protoBom = parseBomProtobuf(cdxBomBytes);
+            if (protoBom != null) {
+                ctx.bomSpecVersion = protoBom.getSpecVersion();
+                if (protoBom.hasSerialNumber()) {
+                    ctx.bomSerialNumber = protoBom.getSerialNumber().replaceFirst("urn:uuid:", "");
+                }
+                if (protoBom.hasMetadata() && protoBom.getMetadata().hasTimestamp()) {
+                    ctx.bomTimestamp = Date.from(Instant.ofEpochSecond(protoBom.getMetadata().getTimestamp().getSeconds()));
+                }
+                ctx.bomVersion = protoBom.getVersion();
+                consumedBom = consumeBom(protoBom);
+            } else {
+                final Parser parser = BomParserFactory.createParser(cdxBomBytes);
+                final var cdxBom = parser.parse(cdxBomBytes);
+                ctx.bomSpecVersion = cdxBom.getSpecVersion();
+                if (cdxBom.getSerialNumber() != null) {
+                    ctx.bomSerialNumber = cdxBom.getSerialNumber().replaceFirst("urn:uuid:", "");
+                }
+                if (cdxBom.getMetadata() != null && cdxBom.getMetadata().getTimestamp() != null) {
+                    ctx.bomTimestamp = cdxBom.getMetadata().getTimestamp();
+                }
+                ctx.bomVersion = cdxBom.getVersion();
+                consumedBom = consumeBom(cdxBom);
             }
-            if (cdxBom.getMetadata() != null && cdxBom.getMetadata().getTimestamp() != null) {
-                ctx.bomTimestamp = cdxBom.getMetadata().getTimestamp();
-            }
-            ctx.bomVersion = cdxBom.getVersion();
-
-            consumedBom = consumeBom(cdxBom);
-        } catch (IOException | ParseException | RuntimeException e) {
+        } catch (ParseException | RuntimeException e) {
             LOGGER.error("Failed to consume BOM", e);
             failWorkflowStepAndCancelDescendants(ctx, WorkflowStep.BOM_CONSUMPTION, e);
             dispatchBomProcessingFailedNotification(ctx, e);
@@ -222,15 +258,14 @@ public class BomUploadProcessingTask implements Subscriber {
              var ignoredMdcBomSpecVersion = MDC.putCloseable(MDC_BOM_SPEC_VERSION, ctx.bomSpecVersion);
              var ignoredMdcBomSerialNumber = MDC.putCloseable(MDC_BOM_SERIAL_NUMBER, ctx.bomSerialNumber);
              var ignoredMdcBomVersion = MDC.putCloseable(MDC_BOM_VERSION, String.valueOf(ctx.bomVersion))) {
-            // Prevent BOMs for the same project to be processed concurrently.
-            // Note that this is an edge case, we're not expecting any lock waits under normal circumstances.
-            final WaitingLockConfiguration lockConfiguration = createLockConfiguration(ctx);
-            processedBom = executeWithLockWaiting(lockConfiguration, () -> processBom(ctx, consumedBom));
-        } catch (Throwable e) {
-            LOGGER.error("Failed to process BOM", e);
-            failWorkflowStepAndCancelDescendants(ctx, WorkflowStep.BOM_PROCESSING, e);
-            dispatchBomProcessingFailedNotification(ctx, e);
-            return;
+            try {
+                processedBom = processBom(ctx, consumedBom);
+            } catch (Throwable e) {
+                LOGGER.error("Failed to process BOM", e);
+                failWorkflowStepAndCancelDescendants(ctx, WorkflowStep.BOM_PROCESSING, e);
+                dispatchBomProcessingFailedNotification(ctx, e);
+                return;
+            }
         }
 
         useJdbiTransaction(handle -> {
@@ -251,6 +286,14 @@ public class BomUploadProcessingTask implements Subscriber {
         dispatchedEvents.addAll(initiateVulnerabilityAnalysis(ctx, vulnAnalysisEvents));
         dispatchedEvents.addAll(initiateRepoMetaAnalysis(repoMetaAnalysisEvents));
         CompletableFuture.allOf(dispatchedEvents.toArray(new CompletableFuture[0])).join();
+    }
+
+    private org.cyclonedx.proto.v1_6.Bom parseBomProtobuf(byte[] cdxBomBytes) {
+        try {
+            return org.cyclonedx.proto.v1_6.Bom.parseFrom(cdxBomBytes);
+        } catch (InvalidProtocolBufferException e) {
+            return null;
+        }
     }
 
     private record ConsumedBom(
@@ -294,6 +337,59 @@ public class BomUploadProcessingTask implements Subscriber {
         final int numServicesTotal = services.size();
 
         final MultiValuedMap<String, String> dependencyGraph = convertDependencyGraph(cdxBom.getDependencies());
+        final int numDependencyGraphEntries = dependencyGraph.asMap().size();
+
+        components = components.stream().filter(distinctComponentsByIdentity(identitiesByBomRef, bomRefsByIdentity)).toList();
+        services = services.stream().filter(distinctServicesByIdentity(identitiesByBomRef, bomRefsByIdentity)).toList();
+        LOGGER.info("""
+                Consumed %d components (%d before de-duplication), %d services (%d before de-duplication), \
+                and %d dependency graph entries""".formatted(components.size(), numComponentsTotal,
+                services.size(), numServicesTotal, numDependencyGraphEntries));
+
+        return new ConsumedBom(
+                project,
+                projectMetadata,
+                components,
+                services,
+                dependencyGraph,
+                identitiesByBomRef,
+                bomRefsByIdentity
+        );
+    }
+
+    private ConsumedBom consumeBom(final org.cyclonedx.proto.v1_6.Bom cdxBom) {
+        // Keep track of which BOM ref points to which component identity.
+        // During component and service de-duplication, we'll potentially drop
+        // some BOM refs, which can break the dependency graph.
+        final var identitiesByBomRef = new HashMap<String, ComponentIdentity>();
+
+        // Component identities will change once components are persisted to the database.
+        // This means we'll eventually have to update identities in "identitiesByBomRef"
+        // for every BOM ref pointing to them.
+        // We avoid having to iterate over, and compare, all values of "identitiesByBomRef"
+        // by keeping a secondary index on identities to BOM refs.
+        // Note: One identity can point to multiple BOM refs, due to component and service de-duplication.
+        final var bomRefsByIdentity = new HashSetValuedHashMap<ComponentIdentity, String>();
+
+        ProjectMetadata projectMetadata = null;
+        if (cdxBom.hasMetadata()) {
+            projectMetadata = convertToProjectMetadata(cdxBom.getMetadata());
+        }
+        final Project project = convertToProject(cdxBom.getMetadata());
+        List<Component> components = new ArrayList<>();
+        if (cdxBom.hasMetadata() && cdxBom.getMetadata().hasComponent()) {
+            components.addAll(convertComponents(cdxBom.getMetadata().getComponent().getComponentsList()));
+        }
+
+        components.addAll(convertComponents(cdxBom.getComponentsList()));
+        components = flatten(components, Component::getChildren, Component::setChildren);
+        final int numComponentsTotal = components.size();
+
+        List<ServiceComponent> services = convertServices(cdxBom.getServicesList());
+        services = flatten(services, ServiceComponent::getChildren, ServiceComponent::setChildren);
+        final int numServicesTotal = services.size();
+
+        final MultiValuedMap<String, String> dependencyGraph = convertDependencyGraph(cdxBom.getDependenciesList());
         final int numDependencyGraphEntries = dependencyGraph.asMap().size();
 
         components = components.stream().filter(distinctComponentsByIdentity(identitiesByBomRef, bomRefsByIdentity)).toList();
@@ -362,6 +458,17 @@ public class BomUploadProcessingTask implements Subscriber {
             qm.getPersistenceManager().setProperty(PROPERTY_RETAIN_VALUES, "true");
 
             return qm.callInTransaction(() -> {
+                // Prevent BOMs for the same project to be processed concurrently.
+                // Note that this is an edge case, we're not expecting any acquisition failures under normal circumstances.
+                // We're not waiting on locks here to prevent threads and connections from being blocked for too long.
+                final boolean lockAcquired = qm.tryAcquireAdvisoryLock(
+                        "%s-%s".formatted(BomUploadProcessingTask.class.getName(), ctx.project.getUuid()));
+                if (!lockAcquired) {
+                    throw new IllegalStateException("""
+                            Failed to acquire advisory lock, likely because another BOM import \
+                            for this project is already in progress""");
+                }
+
                 final Project persistentProject = processProject(ctx, qm, bom.project(), bom.projectMetadata());
 
                 LOGGER.info("Processing %d components".formatted(bom.components().size()));
@@ -530,6 +637,7 @@ public class BomUploadProcessingTask implements Subscriber {
                 applyIfChanged(persistentComponent, component, Component::isInternal, persistentComponent::setInternal);
                 applyIfChanged(persistentComponent, component, Component::getExternalReferences, persistentComponent::setExternalReferences);
 
+                qm.synchronizeComponentOccurrences(persistentComponent, component.getOccurrences());
                 qm.synchronizeComponentProperties(persistentComponent, component.getProperties());
                 idsOfComponentsToDelete.remove(persistentComponent.getId());
             }
@@ -1116,17 +1224,6 @@ public class BomUploadProcessingTask implements Subscriber {
         }
         //don't send event because integrity metadata would be sent recently and don't want to send again
         return false;
-    }
-
-    private static WaitingLockConfiguration createLockConfiguration(final Context ctx) {
-        return new WaitingLockConfiguration(
-                /* createdAt */ Instant.now(),
-                /* name */ "%s-%s".formatted(BomUploadProcessingTask.class.getSimpleName(), ctx.project.getUuid()),
-                /* lockAtMostFor */ Duration.ofMinutes(5),
-                /* lockAtLeastFor */ Duration.ZERO,
-                /* pollInterval */ Duration.ofMillis(100),
-                /* waitTimeout */ Duration.ofMinutes(5)
-        );
     }
 
 }

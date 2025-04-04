@@ -35,6 +35,10 @@ import org.dependencytrack.persistence.converter.OrganizationalContactsJsonConve
 import org.dependencytrack.persistence.converter.OrganizationalEntityJsonConverter;
 import org.dependencytrack.resources.v1.serializers.CustomPackageURLSerializer;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import javax.jdo.annotations.Column;
 import javax.jdo.annotations.Convert;
 import javax.jdo.annotations.Element;
@@ -42,6 +46,8 @@ import javax.jdo.annotations.Extension;
 import javax.jdo.annotations.Extensions;
 import javax.jdo.annotations.FetchGroup;
 import javax.jdo.annotations.FetchGroups;
+import javax.jdo.annotations.ForeignKey;
+import javax.jdo.annotations.ForeignKeyAction;
 import javax.jdo.annotations.IdGeneratorStrategy;
 import javax.jdo.annotations.Index;
 import javax.jdo.annotations.Join;
@@ -51,13 +57,10 @@ import javax.jdo.annotations.Persistent;
 import javax.jdo.annotations.PrimaryKey;
 import javax.jdo.annotations.Serialized;
 import javax.jdo.annotations.Unique;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
-import jakarta.validation.constraints.Size;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -80,6 +83,7 @@ import java.util.UUID;
                 @Persistent(name = "vulnerabilities"),
         }),
         @FetchGroup(name = "BOM_UPLOAD_PROCESSING", members = {
+                @Persistent(name = "occurrences"),
                 @Persistent(name = "properties")
         }),
         @FetchGroup(name = "IDENTITY", members = {
@@ -349,6 +353,7 @@ public class Component implements Serializable {
     private List<ExternalReference> externalReferences;
 
     @Persistent
+    @ForeignKey(name = "COMPONENT_COMPONENT_FK", updateAction = ForeignKeyAction.NONE, deleteAction = ForeignKeyAction.CASCADE, deferred = "true")
     @Column(name = "PARENT_COMPONENT_ID")
     private Component parent;
 
@@ -357,16 +362,21 @@ public class Component implements Serializable {
     private Collection<Component> children;
 
     @Persistent(mappedBy = "component", defaultFetchGroup = "false")
+    @JsonIgnore
+    private Set<ComponentOccurrence> occurrences;
+
+    @Persistent(mappedBy = "component", defaultFetchGroup = "false")
     @Order(extensions = @Extension(vendorName = "datanucleus", key = "list-ordering", value = "groupName ASC, propertyName ASC, id ASC"))
     private List<ComponentProperty> properties;
 
     @Persistent(table = "COMPONENTS_VULNERABILITIES")
-    @Join(column = "COMPONENT_ID")
-    @Element(column = "VULNERABILITY_ID")
+    @Join(column = "COMPONENT_ID", foreignKey = "COMPONENTS_VULNERABILITIES_COMPONENT_FK", deleteAction = ForeignKeyAction.CASCADE)
+    @Element(column = "VULNERABILITY_ID", foreignKey = "COMPONENTS_VULNERABILITIES_VULNERABILITY_FK", deleteAction = ForeignKeyAction.CASCADE)
     @Order(extensions = @Extension(vendorName = "datanucleus", key = "list-ordering", value = "id ASC"))
     private List<Vulnerability> vulnerabilities;
 
     @Persistent(defaultFetchGroup = "true")
+    @ForeignKey(name = "COMPONENT_PROJECT_FK", updateAction = ForeignKeyAction.NONE, deleteAction = ForeignKeyAction.CASCADE, deferred = "true")
     @Index(name = "COMPONENT_PROJECT_ID_IDX")
     @Column(name = "PROJECT_ID", allowsNull = "false")
     @NotNull
@@ -405,6 +415,10 @@ public class Component implements Serializable {
     private transient Set<String> dependencyGraph;
     private transient boolean expandDependencyGraph;
     private transient String author;
+
+    // TODO: Move this to another class, similar to ConciseProjectListItem.
+    //  This is only relevant when listing components.
+    private transient Long occurrenceCount;
 
     public Component(){}
 
@@ -751,12 +765,34 @@ public class Component implements Serializable {
         this.children = children;
     }
 
+    public Set<ComponentOccurrence> getOccurrences() {
+        return occurrences;
+    }
+
+    public void setOccurrences(final Set<ComponentOccurrence> occurrences) {
+        this.occurrences = occurrences;
+    }
+
+    public void addOccurrence(final ComponentOccurrence occurrence) {
+        if (occurrences == null) {
+            occurrences = new HashSet<>();
+        }
+        occurrences.add(occurrence);
+    }
+
     public List<ComponentProperty> getProperties() {
         return properties;
     }
 
     public void setProperties(List<ComponentProperty> properties) {
         this.properties = properties;
+    }
+
+    public void addProperty(final ComponentProperty property) {
+        if (properties == null) {
+            properties = new ArrayList<>();
+        }
+        properties.add(property);
     }
 
     public List<Vulnerability> getVulnerabilities() {
@@ -889,6 +925,14 @@ public class Component implements Serializable {
 
     public void setAuthor(String author){
         this.author=author;
+    }
+
+    public Long getOccurrenceCount() {
+        return occurrenceCount;
+    }
+
+    public void setOccurrenceCount(final Long occurrenceCount) {
+        this.occurrenceCount = occurrenceCount;
     }
 
     @Override

@@ -14,9 +14,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) OWASP Foundation. All Rights Reserved.
-FROM eclipse-temurin:21.0.5_11-jre-jammy@sha256:5f8358c9d5615c18e95728e8b8528bda7ff40a7a5da2ac9a35b7a01f5d9b231a AS jre-build
+FROM eclipse-temurin:21.0.6_7-jre-jammy@sha256:02fc89fa8766a9ba221e69225f8d1c10bb91885ddbd3c112448e23488ba40ab6 AS jre-build
 
-FROM debian:stable-slim@sha256:5724d31208341cef9af6ae2be86be9cda6a87271f362a03481a522c9c19d401b
+FROM debian:stable-slim@sha256:70b337e820bf51d399fa5bfa96a0066fbf22f3aa2c3307e2401b91e2207ac3c3
 
 # Arguments that can be passed at build time
 # Directory names must end with / to avoid errors when ADDing and COPYing
