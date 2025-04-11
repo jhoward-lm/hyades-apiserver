@@ -143,6 +143,7 @@ public class RoleQueryManagerTest extends PersistenceCapableTest {
         Role actualRole = qm.getRole(expectedRoleUuid);
 
         Assert.assertEquals(expectedRole, actualRole);
+        // TODO: Check how this one is supposed to work.
     }
 
     @Test
