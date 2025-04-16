@@ -17,24 +17,51 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) OWASP Foundation. All Rights Reserved.
 
-set -euox pipefail
+set -euo pipefail
 
-SCRIPT_DIR="$(cd -P -- "$(dirname "$0")" && pwd -P)"
-ROOT_DIR="$(cd -P -- "${SCRIPT_DIR}/../../" && pwd -P)"
-CONTAINER_ID="$(docker run -d --rm -e 'POSTGRES_DB=dtrack' -e 'POSTGRES_USER=dtrack' -e 'POSTGRES_PASSWORD=dtrack' -p '5432' postgres:13-alpine)"
-CONTAINER_PORT="$(docker port "${CONTAINER_ID}" "5432/tcp" | cut -d ':' -f 2)"
-TMP_LIQUIBASE_CONFIG_FILE="$(mktemp -p "${ROOT_DIR}")"
+SCRIPT_DIR=$(cd -P -- "$(dirname "${0}")" && pwd -P)
+ROOT_DIR=$(cd -P -- "${SCRIPT_DIR}/../../" && pwd -P)
 
-cat << EOF > "${TMP_LIQUIBASE_CONFIG_FILE}"
-changeLogFile=migration/changelog-main.xml
-url=jdbc:postgresql://localhost:${CONTAINER_PORT}/dtrack
-username=dtrack
-password=dtrack
-EOF
+# shellcheck disable=SC1091
+[[ -f $HOME/.bash_aliases ]] && source "${HOME}/.bash_aliases"
 
-mvn liquibase:update \
-  -Dliquibase.analytics.enabled=false \
-  -Dliquibase.propertyFile="$(basename "${TMP_LIQUIBASE_CONFIG_FILE}")"; \
-  docker exec "${CONTAINER_ID}" pg_dump -Udtrack --schema-only --no-owner --no-privileges dtrack | sed -e '/^--/d' | cat -s > "${ROOT_DIR}/schema.sql"; \
-  docker stop "${CONTAINER_ID}"; \
-  rm "${TMP_LIQUIBASE_CONFIG_FILE}"
+# Enable support for aliases named "docker"
+shopt -s expand_aliases
+
+CONTAINER_ID=$(
+  docker run --detach --rm \
+    --env POSTGRES_DB=dtrack \
+    --env POSTGRES_USER=dtrack \
+    --env POSTGRES_PASSWORD=dtrack \
+    --publish 5432 \
+    postgres:13-alpine
+)
+
+CONTAINER_PORT=$(
+  docker inspect \
+    --format '{{$port := index .NetworkSettings.Ports "5432/tcp"}}{{(index $port 0).HostPort}}' \
+    "${CONTAINER_ID}"
+)
+
+TMP_LIQUIBASE_CONFIG_FILE=$(mktemp -p "${ROOT_DIR}")
+LIQUIBASE_CONFIG=(
+  "changeLogFile=migration/changelog-main.xml"
+  "url=jdbc:postgresql://localhost:${CONTAINER_PORT}/dtrack"
+  "username=dtrack"
+  "password=dtrack"
+)
+
+printf "%s\n" "${LIQUIBASE_CONFIG[@]}" > "${TMP_LIQUIBASE_CONFIG_FILE}"
+
+if mvn liquibase:update \
+  --activate-profiles enhance \
+  --define liquibase.analytics.enabled=false \
+  --define liquibase.propertyFile="$(basename "${TMP_LIQUIBASE_CONFIG_FILE}")"; then
+  docker exec "${CONTAINER_ID}" pg_dump -Udtrack --schema-only --no-owner --no-privileges dtrack |
+    sed -e '/^--/d' |
+    cat -s > "${ROOT_DIR}/schema.sql"
+fi
+
+docker stop "${CONTAINER_ID}"
+
+rm "${TMP_LIQUIBASE_CONFIG_FILE}"
