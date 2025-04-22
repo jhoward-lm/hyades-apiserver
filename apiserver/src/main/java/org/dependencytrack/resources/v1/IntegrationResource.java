@@ -113,21 +113,22 @@ public class IntegrationResource extends AlpineResource {
             @ApiResponse(responseCode = "304", description = "The GitLab integration is already in the desired state"),
             @ApiResponse(responseCode = "401", description = "Unauthorized")
     })
-    @PermissionRequired({ Permissions.Constants.SYSTEM_CONFIGURATION, Permissions.Constants.SYSTEM_CONFIGURATION_CREATE }) // Require admin privileges due to system impact
+    @PermissionRequired({ Permissions.Constants.SYSTEM_CONFIGURATION,
+            Permissions.Constants.SYSTEM_CONFIGURATION_CREATE }) // Require admin privileges due to system impact
     public Response handleGitlabStateChange(
             @Parameter(description = "A valid boolean", required = true) @PathParam("state") String state) {
         try (QueryManager qm = new QueryManager()) {
-            final ConfigProperty property = qm.getConfigProperty(GITLAB_ENABLED.getGroupName(), GITLAB_ENABLED.getPropertyName());
+            final ConfigProperty property = qm.getConfigProperty(GITLAB_ENABLED.getGroupName(),
+                    GITLAB_ENABLED.getPropertyName());
 
-            if (property.getPropertyValue() == state) {
-                return Response.status(Response.Status.NOT_MODIFIED).build();
+            if (!property.getPropertyValue().equals(state)) {
+                if (!state.equalsIgnoreCase("true") && !state.equalsIgnoreCase("false")) {
+                    return Response.status(Response.Status.BAD_REQUEST).build();
+                }
+                property.setPropertyValue(state);
+                qm.persist(property);
+                Event.dispatch(new GitLabIntegrationStateEvent());
             }
-            if (!state.equalsIgnoreCase("true") && !state.equalsIgnoreCase("false")) {
-                return Response.status(Response.Status.BAD_REQUEST).build();
-            }
-            property.setPropertyValue(state);
-            qm.persist(property);
-            Event.dispatch(new GitLabIntegrationStateEvent());
         }
 
         return Response.ok().build();
