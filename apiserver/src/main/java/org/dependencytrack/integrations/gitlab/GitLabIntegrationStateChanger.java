@@ -96,12 +96,11 @@ public class GitLabIntegrationStateChanger extends AbstractIntegrationPoint {
 
         for (GitLabRole role : GitLabRole.values()) {
             try {
-                if (qm.getRoleByName(role.name()) == null) {
-                    List<String> permList = role.getPermissions().stream().toList();
-                    qm.createRole(role.name(), getPermissionsByName(permList));
-                    LOGGER.info("Created GitLab role: " + role.name());
+                if (qm.getRoleByName(role.getDescription()) == null) {
+                    qm.createRole(role.getDescription(), qm.getPermissionsByName(role.getPermissions().toArray(String[]::new)));
+                    LOGGER.info("Created GitLab role: " + role.getDescription());
                 } else {
-                    LOGGER.info("GitLab role already exists: " + role.name());
+                    LOGGER.info("GitLab role already exists: " + role.getDescription());
                 }
             } catch (Exception ex) {
                 LOGGER.error("An error occurred while creating GitLab roles", ex);
@@ -118,14 +117,14 @@ public class GitLabIntegrationStateChanger extends AbstractIntegrationPoint {
     private void removeGitlabRoles() {
         try (var qm = this.qm; Handle jdbiHandle = openJdbiHandle()) {
             for (GitLabRole role : GitLabRole.values()) {
-                Role targetRole = qm.getRoleByName(role.name());
+                Role targetRole = qm.getRoleByName(role.getDescription());
                 if (targetRole == null) {
-                    LOGGER.info("GitLab role does not exist: " + role.name());
+                    LOGGER.info("GitLab role does not exist: " + role.getDescription());
                     continue;
                 }
 
                 jdbiHandle.attach(RoleDao.class).deleteRole(targetRole.getId());
-                LOGGER.info("Removed GitLab role: " + role.name());
+                LOGGER.info("Removed GitLab role: " + role.getDescription());
             }
 
         } catch (Exception ex) {

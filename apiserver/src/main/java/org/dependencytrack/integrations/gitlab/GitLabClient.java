@@ -134,6 +134,8 @@ public class GitLabClient {
         JSONObject variables = new JSONObject();
         JSONObject queryObject = new JSONObject();
 
+        variables.put("includeTopics", false);
+
         if (topics != null && !topics.isEmpty()) {
             variables.put("includeTopics", true);
             variables.put("topics", topics);
@@ -165,9 +167,10 @@ public class GitLabClient {
 
                 String responseBody = EntityUtils.toString(responseEntity);
                 JSONObject responseData = JSONValue.parse(responseBody, JSONObject.class);
-                JSONObject dataObject = (JSONObject) responseData.get("data");
-                JSONObject projectsObject = (JSONObject) dataObject.get("projects");
-                JSONArray nodes = (JSONArray) projectsObject.get("nodes");
+                JSONObject dataObject = (JSONObject) responseData.getOrDefault("data", new JSONObject());
+                JSONObject projectsObject = (JSONObject) dataObject.getOrDefault("withoutTopics",
+                        dataObject.getOrDefault("withTopics", new JSONObject()));
+                JSONArray nodes = (JSONArray) projectsObject.getOrDefault("nodes", new JSONArray());
 
                 for (Object nodeObject : nodes) {
                     JSONObject node = (JSONObject) nodeObject;
