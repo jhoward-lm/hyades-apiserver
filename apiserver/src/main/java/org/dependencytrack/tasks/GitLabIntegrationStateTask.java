@@ -52,7 +52,7 @@ public class GitLabIntegrationStateTask implements LoggableSubscriber {
             return;
         }
 
-        LOGGER.info("Starting gitLab state change task");
+        LOGGER.info("Starting GitLab state change task");
 
         try (QueryManager qm = new QueryManager()) {
             GitLabIntegrationStateChanger stateChanger = new GitLabIntegrationStateChanger();

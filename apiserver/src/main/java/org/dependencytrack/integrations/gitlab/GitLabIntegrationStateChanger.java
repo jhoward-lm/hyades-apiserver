@@ -49,47 +49,33 @@ public class GitLabIntegrationStateChanger extends AbstractIntegrationPoint {
 
     @Override
     public String name() {
-        return "GitLab Enable";
+        return "GitLab Integration State Changer";
     }
 
     @Override
     public String description() {
-        return "Executes GitLab enable and disable tasks";
+        return "Executes GitLab integration enable and disable tasks";
     }
 
     public void setState(boolean isEnabled) {
         try {
             if (isEnabled) {
                 LOGGER.info("Enabling GitLab integration");
-                enable();
+                createGitLabRoles();
+                LOGGER.info("GitLab integration enabled");
             } else {
                 LOGGER.info("Disabling GitLab integration");
-                disable();
+                removeGitlabRoles();
+                LOGGER.info("GitLab integration disabled");
             }
 
         } catch (IOException | URISyntaxException ex) {
-            LOGGER.error("An error occurred while querying GitLab GraphQL API", ex);
+            LOGGER.error("An error occurred while changing Gitlab Integration State", ex);
             handleException(LOGGER, ex);
         }
     }
 
-    private void enable() throws IOException, URISyntaxException {
-        // Logic to enable GitLab integration
-
-        createGitLabRoles();
-
-        LOGGER.info("GitLab integration enabled");
-    }
-
-    private void disable() throws IOException, URISyntaxException {
-        //removeGitLabUsers();
-        removeGitlabRoles();
-        LOGGER.info("GitLab integration disabled");
-    }
-
     private void createGitLabRoles() {
-        var qm = this.qm;
-
         if (PERMISSIONS_MAP.isEmpty()) {
             populatePermissionsMap(qm);
         }
@@ -109,13 +95,8 @@ public class GitLabIntegrationStateChanger extends AbstractIntegrationPoint {
         }
     }
 
-    private void removeGitLabUsers() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'removeGitLabUsers'");
-    }
-
     private void removeGitlabRoles() {
-        try (var qm = this.qm; Handle jdbiHandle = openJdbiHandle()) {
+        try (Handle jdbiHandle = openJdbiHandle()) {
             for (GitLabRole role : GitLabRole.values()) {
                 Role targetRole = qm.getRoleByName(role.getDescription());
                 if (targetRole == null) {
