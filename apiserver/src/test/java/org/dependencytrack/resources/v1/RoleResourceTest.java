@@ -11,6 +11,7 @@ import org.dependencytrack.JerseyTestRule;
 import org.dependencytrack.model.Project;
 import org.dependencytrack.model.Role;
 import org.dependencytrack.ResourceTest;
+import org.dependencytrack.auth.Permissions;
 import org.dependencytrack.persistence.DefaultObjectGenerator;
 import org.dependencytrack.persistence.jdbi.JdbiFactory;
 import org.dependencytrack.persistence.jdbi.RoleDao;
@@ -88,12 +89,17 @@ public class RoleResourceTest extends ResourceTest {
 
     @Test
     public void createRoleTest() {
-        List<Permission> rolePermissions = new ArrayList<Permission>();
-        Role role = qm.createRole("ABC", rolePermissions);
+        initializeWithPermissions(Permissions.ROLE_MANAGEMENT_CREATE);
+
         Response response = jersey.target(V1_ROLE).request()
                 .header(X_API_KEY, apiKey)
-                .put(Entity.entity(role, MediaType.APPLICATION_JSON));
-        Assert.assertEquals(201, response.getStatus(), 0);
+                .put(Entity.json(/* language=JSON */ """
+                        {
+                          "name": "ABC",
+                          "permissions": []
+                        }
+                        """));
+        Assert.assertEquals(201, response.getStatus());
         JsonObject json = parseJsonObject(response);
         Assert.assertNotNull(json);
         Assert.assertEquals("ABC", json.getString("name"));
